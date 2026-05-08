@@ -24,7 +24,7 @@ for label in server tunnel; do
 done
 
 pkill -f "python3 $SCRIPT_DIR/server.py" 2>/dev/null && stopped=$((stopped + 1)) || true
-pkill -f "cloudflared tunnel --url http://localhost:8092" 2>/dev/null && stopped=$((stopped + 1)) || true
+pkill -f "cloudflared tunnel.*run verify-action" 2>/dev/null && stopped=$((stopped + 1)) || true
 
 if [ "$stopped" -eq 0 ]; then
     echo "Nothing to stop."

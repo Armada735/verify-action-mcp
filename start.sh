@@ -85,39 +85,34 @@ for i in $(seq 1 10); do
     sleep 1
 done
 
-# Start cloudflared Quick Tunnel.
+# Start cloudflared Named Tunnel (verify-action → verify.armadalab.dev).
+# Config at ~/.cloudflared/config.yml; tunnel ingress validated at install time.
 : > "$LOG_DIR/tunnel.log"
-setsid nohup "$CLOUDFLARED" tunnel --url "http://localhost:$PORT" \
-    --no-autoupdate \
+setsid nohup "$CLOUDFLARED" tunnel --config "$HOME/.cloudflared/config.yml" \
+    run verify-action \
     >"$LOG_DIR/tunnel.log" 2>&1 < /dev/null &
 TUN_LAUNCHER_PID=$!
-sleep 1
+sleep 2
 
-TUN_REAL_PID=$(pgrep -f "cloudflared tunnel --url http://localhost:$PORT" 2>/dev/null \
+TUN_REAL_PID=$(pgrep -f "cloudflared tunnel.*run verify-action" 2>/dev/null \
     | grep -v "^$$\$" | head -1 || true)
 if [ -z "$TUN_REAL_PID" ]; then
     TUN_REAL_PID="$TUN_LAUNCHER_PID"
 fi
 echo "$TUN_REAL_PID" > "$TUNNEL_PID"
 
-# Wait for the trycloudflare URL to appear in the log.
-echo "Waiting for tunnel URL..."
-URL=""
-for i in $(seq 1 60); do
-    URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG_DIR/tunnel.log" 2>/dev/null | head -1 || true)
-    if [ -n "$URL" ]; then
-        echo "$URL" > "$URL_FILE"
-        echo "Tunnel URL: $URL"
+# URL is hardcoded for Named Tunnel; CNAME is set by `cloudflared tunnel route dns`.
+URL="https://verify.armadalab.dev"
+echo "$URL" > "$URL_FILE"
+echo "Tunnel URL: $URL"
+
+# Wait briefly for tunnel to register with the edge (logs "Registered tunnel connection").
+for i in $(seq 1 30); do
+    if grep -q "Registered tunnel connection" "$LOG_DIR/tunnel.log" 2>/dev/null; then
         break
     fi
     sleep 1
 done
-
-if [ -z "$URL" ]; then
-    echo "Failed to obtain tunnel URL after 60s. Tunnel log:"
-    tail -30 "$LOG_DIR/tunnel.log"
-    exit 1
-fi
 
 # Self-test via the public URL.
 echo "Self-test (via Cloudflare DoH to bypass local DNS)..."
