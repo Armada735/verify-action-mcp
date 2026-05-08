@@ -71,8 +71,14 @@ discord_notify() {
 }
 
 # Clean up stale state and restart.
+# stop.sh sends SIGTERM but doesn't wait for processes to fully exit; the
+# listening socket on port 8092 can remain in transient state for a moment
+# even after the server process exits. Sleep long enough that the kernel
+# has released the bind. Failure-test 2026-05-08 showed 2s was occasionally
+# too short (first watchdog tick fell through, second succeeded); 5s gives
+# margin and brings expected recovery time from ~4 min to ~2 min.
 "$SCRIPT_DIR/stop.sh" >> "$WD_LOG" 2>&1
-sleep 2
+sleep 5
 "$SCRIPT_DIR/start.sh" >> "$WD_LOG" 2>&1
 
 if server_alive && tunnel_alive; then
