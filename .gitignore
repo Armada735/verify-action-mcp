@@ -1,0 +1,41 @@
+# Runtime state — never commit
+state/
+logs/
+
+# Trace data — kept private on the VPS
+traces/
+
+# Private operational docs (kill criteria, outreach plan, internal roadmap).
+# These contain partner names, contact strategy, trip-wires, and competitor
+# response plans — all of which are competitively sensitive and should not
+# ship in any OSS fork. The repo's public surface is README.md / SPEC.md /
+# DISTRIBUTION.md only.
+private/
+
+# Competitor monitoring (trip-wire keywords + watched sources).
+# Operational tool for the maintainer — shipping this would tell competitors
+# what wording we are watching for, defeating the monitor's purpose.
+monitor/
+
+# Reports dir (chmod 700, internal artifacts).
+reports/
+
+# Internal phase reports (kept locally for project history; not part of the
+# public-facing surface). Replace with CHANGELOG.md if a public history is
+# needed later.
+PHASE_*_REPORT.md
+
+# Distribution playbook (HN/Zenn/Smithery launch templates).
+# Internal launch material; public version may ship separately later.
+DISTRIBUTION.md
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
