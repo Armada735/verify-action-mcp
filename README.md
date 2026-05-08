@@ -155,8 +155,10 @@ Every `/verify` call also issues an HMAC-SHA256-attested receipt as a nested `re
 | `GET` | `/stats` | Aggregate counters since process start |
 | `GET` | `/privacy` | Privacy notice (HTML) |
 | `GET` | `/tos` | Terms of service (HTML) |
+| `GET` | `/feedback` | Feedback endpoint description (HTML) |
 | `POST` | `/verify` | REST: `{claim, evidence, kind?, context?, caller_context?}` → verdict + receipt |
 | `POST` | `/mcp` | MCP JSON-RPC 2.0 endpoint |
+| `POST` | `/feedback` | Anonymous free-form feedback: `{message, category?, harness?, trace_ref?}` |
 
 #### MCP methods
 

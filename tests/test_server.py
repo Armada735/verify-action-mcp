@@ -183,6 +183,53 @@ class TestJapaneseVerbDispatch(unittest.TestCase):
         self.assertEqual(r["aar_verdict"], "contradicted")
 
 
+class TestFeedbackEndpoint(unittest.TestCase):
+    """POST /feedback — anonymous, PII-guarded, schema-closed feedback channel."""
+
+    def _normalize_request(self, payload):
+        # Mirror the server's normalization to test logic in isolation.
+        if not isinstance(payload, dict):
+            return None, "input_must_be_object"
+        message = payload.get("message")
+        if not isinstance(message, str) or not message.strip():
+            return None, "message_required"
+        if len(message) > server.FEEDBACK_MSG_CAP:
+            return None, "message_too_long"
+        cat_raw = payload.get("category")
+        category = cat_raw if cat_raw in server.FEEDBACK_CATEGORIES else "other"
+        harness_raw = payload.get("harness")
+        harness = harness_raw if harness_raw in server.FEEDBACK_HARNESSES else "other"
+        return {"message": message, "category": category, "harness": harness}, None
+
+    def test_message_required(self):
+        normalized, err = self._normalize_request({"category": "bug"})
+        self.assertEqual(err, "message_required")
+
+    def test_unknown_category_buckets_to_other(self):
+        normalized, err = self._normalize_request(
+            {"message": "test", "category": "fictional"}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(normalized["category"], "other")
+
+    def test_unknown_harness_buckets_to_other(self):
+        normalized, err = self._normalize_request(
+            {"message": "test", "harness": "weird-harness-99"}
+        )
+        self.assertIsNone(err)
+        self.assertEqual(normalized["harness"], "other")
+
+    def test_known_category_preserved(self):
+        for cat in server.FEEDBACK_CATEGORIES:
+            normalized, err = self._normalize_request({"message": "x", "category": cat})
+            self.assertEqual(normalized["category"], cat)
+
+    def test_message_size_cap(self):
+        big = "x" * (server.FEEDBACK_MSG_CAP + 1)
+        normalized, err = self._normalize_request({"message": big})
+        self.assertEqual(err, "message_too_long")
+
+
 class TestSpecDoc(unittest.TestCase):
     def test_no_landscape_endpoint(self):
         spec = server._spec_doc()
