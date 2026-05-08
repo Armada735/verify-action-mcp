@@ -69,15 +69,20 @@ POSTAL_JP_RE = re.compile(r"〒\s*\d{3}\s*-\s*\d{4}\b")
 # Detect address-like strings (kanji place chars + numbers): heuristic.
 ADDRESS_JP_HINT_RE = re.compile(r"(東京都|大阪府|北海道|京都府|[都道府県][^、。\s]{1,15}[市区町村]).{1,50}\d+(-\d+)+")
 
-# マイナンバー (12 digits, optionally split 4-4-4 with spaces or dashes).
-# This is intentionally aggressive — false-positive over false-negative.
-# A 12-digit number elsewhere (e.g. a phone tag, a row count) will trip this.
-MY_NUMBER_RE = re.compile(r"(?<!\d)\d{4}[\-\s]?\d{4}[\-\s]?\d{4}(?!\d)")
+# マイナンバー-shape (11-13 digit run, optional separators).
+# Widened from "exactly 12 digits" to 11-13 digit window after a security
+# audit finding that 13-digit national IDs (e.g. KR RRN) and slightly
+# shortened forms slipped through. Aggressive on purpose — false-positive
+# over false-negative.
+MY_NUMBER_RE = re.compile(r"(?<!\d)(?:\d[\-\s]?){10,12}\d(?!\d)")
 
 # JP passport: two uppercase letters + 7 digits.
 PASSPORT_JP_RE = re.compile(r"\b[A-Z]{2}\d{7}\b")
 
-# Credit-card-shape: 13-19 digits with optional separators. Verified via Luhn.
+# Credit-card-shape: 13-19 digit run with optional separators.
+# Luhn validity is NOT required — the audit showed that non-Luhn 16-digit
+# numbers (e.g. test cards with one digit perturbed) still constitute
+# regulatory PII risk and should be rejected.
 CC_SHAPE_RE = re.compile(r"(?<!\d)(?:\d[\-\s]?){12,18}\d(?!\d)")
 
 
@@ -172,14 +177,16 @@ def _detect_pii_inner(text: str) -> list[str]:
     if ADDRESS_JP_HINT_RE.search(text):
         found.append("address_jp")
     cc_hit = False
-    for m in CC_SHAPE_RE.finditer(text):
-        if _luhn_valid(m.group()):
-            found.append("credit_card")
-            cc_hit = True
-            break
-    # Only flag "my_number" when there's no credit-card hit at the same place.
-    # CC matches are 13-19 digits and would always also satisfy MY_NUMBER_RE
-    # (12 contiguous digits). Without this guard, a CC always reports both.
+    for _m in CC_SHAPE_RE.finditer(text):
+        # Reject any 13-19 digit run regardless of Luhn validity. Privacy
+        # posture > convenience: a Luhn-invalid 16-digit string still likely
+        # represents a personal-data shape (mistyped card, foreign ID, etc.).
+        found.append("credit_card")
+        cc_hit = True
+        break
+    # Only flag the 11-13-digit my_number bucket when there's no CC hit at
+    # the same place. CC matches (13-19 digits) overlap the 13-digit upper
+    # end of MY_NUMBER_RE; reporting both would be redundant.
     if not cc_hit and MY_NUMBER_RE.search(text):
         found.append("my_number_or_12digit")
     if PASSPORT_JP_RE.search(text):
@@ -280,9 +287,9 @@ def reject_reason_with_categories(categories: list[str]) -> str:
         "phone": "phone number",
         "postal_code_jp": "Japanese postal code",
         "address_jp": "Japanese address pattern",
-        "my_number_or_12digit": "12-digit identifier",
+        "my_number_or_12digit": "11-13-digit national-id-shaped number",
         "passport_jp": "Japanese passport number",
-        "credit_card": "credit-card-shaped number (Luhn-valid)",
+        "credit_card": "credit-card-shaped number (13-19 digits)",
         "too_deeply_nested": f"structure deeper than {SCAN_MAX_DEPTH} levels",
     }
     listed = ", ".join(cat_human.get(c, c) for c in categories)

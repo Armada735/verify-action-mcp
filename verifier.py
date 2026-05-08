@@ -57,10 +57,13 @@ def _infer_kind(claim: str, evidence: Any) -> str:
         return "file_op"
     if any(k in e for k in ("response_status", "response_body", "request")):
         return "api_call"
-    # Weak: verbs in claim
+    # Weak: verbs in claim (English + JP stems)
     cl = (claim or "").lower()
+    has_db_evidence = any(k in e for k in ("operation", "before_count", "after_count", "affected_rows"))
     if any(t in cl for t in ("delete", "deleted", "insert", "inserted", "update")):
-        return "db_op" if any(k in e for k in ("operation", "before_count", "after_count", "affected_rows")) else "generic"
+        return "db_op" if has_db_evidence else "generic"
+    if any(t in (claim or "") for t in ("削除", "作成", "更新", "挿入", "追加", "変更", "消去")):
+        return "db_op" if has_db_evidence else "generic"
     return "generic"
 
 

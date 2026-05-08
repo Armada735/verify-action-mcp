@@ -50,8 +50,9 @@ class TestMyNumber(unittest.TestCase):
     def test_with_dashes(self):
         self.assertIn("my_number_or_12digit", pii_guard.detect_pii("1234-5678-9012"))
 
-    def test_eleven_digits_not_caught(self):
-        self.assertNotIn("my_number_or_12digit", pii_guard.detect_pii("12345678901"))
+    def test_eleven_digits_now_caught(self):
+        # Policy change: MY_NUMBER_RE widened from exact-12 to 11-13 digit range.
+        self.assertIn("my_number_or_12digit", pii_guard.detect_pii("12345678901"))
 
 
 class TestPassportJP(unittest.TestCase):
@@ -73,12 +74,24 @@ class TestCreditCard(unittest.TestCase):
             f"expected credit_card or my_number, got {result}",
         )
 
-    def test_random_16_digits_invalid_luhn(self):
-        # 16 digits not Luhn-valid — should not flag credit_card
-        # (but may still flag my_number_or_12digit due to 12-digit prefix match)
-        # 1111222233334445 (last digit 5): Luhn invalid
+    def test_random_16_digits_no_longer_requires_luhn(self):
+        # Policy change (audit fix): any 13-19 digit run now flags credit_card,
+        # even if Luhn-invalid. Privacy > convenience: shapes that *look* like
+        # CC numbers are blocked regardless of checksum validity.
+        # 1111222233334445 (last digit 5): Luhn invalid, but still PII-shaped.
         result = pii_guard.detect_pii("Random: 1111222233334445")
-        self.assertNotIn("credit_card", result)
+        self.assertIn("credit_card", result)
+
+    def test_thirteen_digit_id_caught(self):
+        # 13-digit national-id-shape (e.g. KR RRN) — flagged as credit_card
+        # under the broadened CC_SHAPE_RE (13-19 digits).
+        result = pii_guard.detect_pii("RRN: 1234567890123")
+        self.assertIn("credit_card", result)
+
+    def test_eleven_digit_my_number_caught(self):
+        # MY_NUMBER_RE widened to 11-13 digits. 11-digit standalone now flags.
+        result = pii_guard.detect_pii("ID: 12345678901")
+        self.assertIn("my_number_or_12digit", result)
 
 
 class TestAddressJP(unittest.TestCase):

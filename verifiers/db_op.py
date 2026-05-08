@@ -25,6 +25,31 @@ VERB_TO_DIR = {
     "set": 0,
 }
 
+# JP verb stems → (normalized English verb, direction). Stem-based so we
+# match 削除した / 削除しました / 削除し / 削除中 etc. by substring presence.
+# Order matters: longer / more specific stems first to avoid weak matches.
+JP_VERB_PATTERNS: list[tuple[str, str, int]] = [
+    # delete (-1)
+    ("削除", "deleted", -1),
+    ("消去", "deleted", -1),
+    ("抹消", "deleted", -1),
+    # insert / create (+1)
+    ("作成", "created", +1),
+    ("生成", "created", +1),
+    ("新規", "created", +1),
+    ("追加", "added", +1),
+    ("挿入", "inserted", +1),
+    # update (0)
+    ("更新", "updated", 0),
+    ("変更", "updated", 0),
+    ("編集", "updated", 0),
+    ("修正", "updated", 0),
+    # send (0) — covered for api_call but harmless here
+    ("送信", "sent", 0),
+    ("発行", "sent", 0),
+    ("送付", "sent", 0),
+]
+
 RX_TABLE_FROM_CLAIM = re.compile(
     r"\b(?:from|in|to|on|table|of|of\s+the)\s+([a-zA-Z_][\w]*)",
     re.IGNORECASE,
@@ -41,12 +66,21 @@ RX_NUMERIC_ID = re.compile(
 )
 
 
-def _claim_classify(claim_lower: str) -> tuple[str, int]:
-    """Return (verb, expected row delta direction). 'unknown' if no verb found."""
+def _claim_classify(claim_lower: str, claim_orig: str = "") -> tuple[str, int]:
+    """Return (verb, expected row delta direction). 'unknown' if no verb found.
+
+    Tries ASCII tokens first (English verb dictionary), then falls back to
+    Japanese stem matching on the original (non-lowered) claim.
+    """
     tokens = re.findall(r"[a-z]+", claim_lower)
     for t in tokens:
         if t in VERB_TO_DIR:
             return t, VERB_TO_DIR[t]
+    # JP fallback: scan the original claim for verb stems.
+    target = claim_orig or claim_lower
+    for stem, normalized_verb, direction in JP_VERB_PATTERNS:
+        if stem in target:
+            return normalized_verb, direction
     return "unknown", 0
 
 
@@ -72,7 +106,7 @@ def verify(claim: str, evidence: dict, context: str | None = None) -> dict:
     sql_kind = _classify_sql(op_text)
 
     claim_lower = claim.lower()
-    verb, expected_dir = _claim_classify(claim_lower)
+    verb, expected_dir = _claim_classify(claim_lower, claim)
 
     pos: list[str] = []
     neg: list[str] = []
