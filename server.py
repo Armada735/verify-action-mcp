@@ -179,6 +179,17 @@ a particular pair. <strong>Receipts attest issuance and integrity, not factual t
 legal admissibility</strong> — they prove a single private key signed under our verifier
 version, not that the verdict is correct.</p>
 
+<aside style="background:#fffbe6;border-left:4px solid #d97706;padding:0.5em 1em;margin:1.5em 0;font-size:0.95em;">
+<strong>v0 trust model.</strong> Receipts are signed with HMAC-SHA256 — a
+<em>symmetric</em> primitive. This means the receipt verifies that
+<em>this service holds the key that signed it</em>; it is <strong>not a
+third-party cryptographic attestation</strong> in the public-key sense.
+Treat v0 receipts as a content-addressed log entry from us, not as
+non-repudiable proof. Asymmetric (ed25519) signing and multi-issuer
+support are on the v1 roadmap — see
+<a href="https://github.com/Armada735/verify-action-mcp/blob/main/aar/SCHEMA_UPGRADES.md">aar/SCHEMA_UPGRADES.md</a>.
+</aside>
+
 <h2>Who can call this</h2>
 <p>Anyone — operators running agents (operator-funded), agents calling on their own
 behalf (agent-wallet via x402 / Stripe MPP / etc.), or hybrid setups. Same receipt
@@ -260,19 +271,32 @@ fitness for a particular purpose, and non-infringement. Verdicts returned by the
 Service are heuristic and may be incorrect. Do not rely on them as the sole basis
 for any consequential action.</p>
 
-<h2>4. Limitation of liability / 責任制限</h2>
+<h2>4. Service limits / 利用制限</h2>
+<p>To prevent abuse, the Service enforces:</p>
+<ul>
+<li><strong>30 requests / minute / source IP</strong> on POST endpoints. Excess
+returns HTTP 429 with a <code>Retry-After</code> hint.</li>
+<li><strong>1,000 POST requests / hour</strong> globally. Excess returns HTTP 503.</li>
+<li><strong>Maximum request body 32 KB</strong>. Larger payloads return HTTP 413.</li>
+<li>Repeated abuse may result in IP-hash blocklisting.</li>
+</ul>
+<p>These limits may be raised or lowered without notice. Sustained heavy use
+should be done by self-hosting — the source code is public at
+<a href="https://github.com/Armada735/verify-action-mcp">github.com/Armada735/verify-action-mcp</a>.</p>
+
+<h2>5. Limitation of liability / 責任制限</h2>
 <p>To the maximum extent permitted by applicable law, the Operator shall not be liable
 for any direct, indirect, incidental, consequential, or punitive damages arising
 from use of the Service. The Operator's aggregate liability shall not exceed JPY 0
 (zero), reflecting the free-of-charge nature of this probe.</p>
 
-<h2>5. Cross-border data transit / 国境を越える通信</h2>
+<h2>6. Cross-border data transit / 国境を越える通信</h2>
 <p>The Service is reachable through Cloudflare, Inc. (US) edge infrastructure.
 By submitting a request, you consent to your request transiting through
 infrastructure located outside Japan (Cloudflare's global edge network).
 Cloudflare's data processing addendum applies to its handling.</p>
 
-<h2>6. Governing law / 準拠法</h2>
+<h2>7. Governing law / 準拠法</h2>
 <p>These Terms are governed by the laws of Japan. Any dispute arising out of or in
 connection with these Terms shall be exclusively subject to the jurisdiction of
 the Tokyo District Court (or Tokyo Summary Court for small claims), as the court
@@ -280,14 +304,14 @@ of first instance.</p>
 <p>本規約は日本法に準拠します。本規約に起因または関連する紛争については、東京地方
 裁判所（少額の場合は東京簡易裁判所）を第一審の専属的合意管轄裁判所とします。</p>
 
-<h2>7. Changes / 変更</h2>
+<h2>8. Changes / 変更</h2>
 <p>The Operator may update these Terms at any time. Material changes will be reflected
 in the "Last updated" date above. Continued use after such update constitutes
 acceptance.</p>
 
-<h2>8. Contact / 連絡先</h2>
+<h2>9. Contact / 連絡先</h2>
 <p>For complaints, deletion requests, takedown requests, or legal correspondence,
-contact: <code>bhbdrgt266@privaterelay.appleid.com</code>.</p>
+contact: <code>hello@armadalab.dev</code>.</p>
 
 <hr/>
 <p><a href="/">← back to about</a> | <a href="/privacy">Privacy Policy →</a></p>
@@ -356,7 +380,7 @@ false-negative), please contact us and we will investigate and delete.</p>
 
 <h2>7. Contact / 連絡先 / 苦情窓口</h2>
 <p>For privacy inquiries, deletion requests, or PIPC-related complaints:
-<code>bhbdrgt266@privaterelay.appleid.com</code>.</p>
+<code>hello@armadalab.dev</code>.</p>
 
 <h2>8. Changes / 変更</h2>
 <p>This policy may be updated. Material changes are reflected in the "Last
@@ -904,7 +928,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "user_agent": ua, "headers": headers})
             return
 
-        if path in ("/", "/about"):
+        if path == "/about":
+            # /about is a permanent redirect to / so the canonical landing
+            # is unambiguous; previously both served the same HTML which
+            # external reviewers flagged as a possible misconfig.
+            self.send_response(301)
+            self.send_header("Location", "/")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            status = 301
+        elif path == "/":
             self._send(200, ABOUT_PAGE)
             status = 200
         elif path == "/tos":
