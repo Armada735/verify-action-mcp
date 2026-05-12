@@ -34,7 +34,7 @@ These silent successes don't show up in benchmarks (which score "did the model s
 
 - "I added a null check for `user.email`" — but the diff also rewrote 5 unrelated functions. (`code_diff` — primary)
 - "I deleted user 12345" — but the `affected_rows` field or SQL operation actually targeted id 99999. (`db_op` — experimental)
-- "I sent the welcome email to alice@example.com" — but the request body actually targeted bob@example.com. (`api_call` — experimental)
+- "I posted the webhook update successfully" — but the API returned HTTP 503 with an error body. (`api_call` — experimental)
 
 `verify-action-mcp` runs *after* the agent has done the work, with the artifacts. Existing pre-action policy admission control products from major vendors operate on a different lane.
 
@@ -205,18 +205,21 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 # → aar_verdict: contradicted (legacy: mismatch) — claim said 200 lines, evidence says 50
 ```
 
-#### `api_call` — target email mismatch (critical signal)
+#### `api_call` — HTTP status + body mismatch
 
 ```bash
 curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/json' -d '{
-  "claim": "Sent welcome email to alice@example.com",
+  "claim": "Posted webhook update successfully",
   "evidence": {
-    "request": {"to":"bob@example.com","subject":"Welcome!"},
-    "response_status": 200, "response_body": "{\"sent\":true}"
+    "request": {"event":"user.updated"},
+    "response_status": 503,
+    "response_body": "{\"error\":\"service unavailable\"}"
   }
 }'
-# → aar_verdict: contradicted — target email differs from claim
+# → aar_verdict: contradicted — claim implies success but HTTP 503 and body indicates failure
 ```
+
+> Note: the hosted endpoint's PII guard rejects email-shape strings, phone numbers, and credit-card-shape digits in the payload. If your claim/evidence carries those, substitute placeholders like `<user_id_1234>` or `<email>` before calling. The api_call verifier also detects email/URL target mismatches when those values are present in non-PII form (e.g., webhook IDs).
 
 ### Privacy
 
@@ -309,7 +312,7 @@ AI エージェントが「これをやった」と報告したが、実際の�
 
 - 「`user.email` に null チェックを追加した」と言うが、diff には無関係な 5 関数の rewrite が混ざってる（`code_diff` — primary）
 - 「user 12345 を削除しました」と言うが、`affected_rows` や SQL が実は id 99999 を指している（`db_op` — experimental）
-- 「alice@example.com に welcome メールを送った」と言うが、実際の request body は bob@example.com 宛（`api_call` — experimental）
+- 「webhook update を送信完了した」と言うが、実 API は HTTP 503 + エラー body を返している（`api_call` — experimental）
 
 ベンチマークは「モデルが成功と言ったか」を見ますが、「実際の状態が claim と整合的に更新されたか」は別軸の問題です。
 
