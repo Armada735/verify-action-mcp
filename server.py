@@ -146,21 +146,24 @@ ABOUT_PAGE = """<!DOCTYPE html>
 <body style="font-family:sans-serif;max-width:760px;margin:2em auto;line-height:1.6;">
 <h1>verify_action</h1>
 <p>A small, JP-jurisdiction reference verification primitive for AI agent actions.
-Submit a claim about what your agent did, plus structured evidence of what actually
-happened, and receive an independent integrity check plus an
+Submit a claim about what your agent did, plus structured evidence describing the result,
+and receive a consistency check (supplied evidence vs claim) plus an
 <strong>HMAC-attested receipt</strong> that downstream tooling, CI gates, and audit
-reviewers can reference. Open source, free, no warranty (see <a href="/tos">ToS</a>).</p>
+reviewers can reference. The service does not independently observe your database,
+repository, or APIs — it checks supplied evidence against a supplied claim and signs
+the verdict under its key. Open source, free, no warranty (see <a href="/tos">ToS</a>).</p>
 
 <h2>Why this exists</h2>
 <p>Pre-action policy admission control systems (e.g., policy-as-code admission
 control with Cedar / Rego, lifecycle hooks) decide <em>"is this action allowed?"</em>
 before execution. That is a different problem.</p>
-<p>This service answers a complementary question: <em>"after the action ran, does the
-evidence support the agent's claim about what it did?"</em>. AI agents commonly assert
-success when reality didn't match — rows that weren't deleted, files that weren't
-created, emails that bounced, code changes that touched five unrelated files. We
-catch that drift with structured evidence comparison and emit a content-addressed
-HMAC-attested receipt that can be referenced later.</p>
+<p>This service answers a complementary question: <em>"is the supplied evidence
+internally consistent with the agent's claim about what it did?"</em>. AI agents
+commonly assert success when the supplied evidence does not actually support
+the claim — diffs that touched five unrelated functions, row deltas that do
+not match a delete, HTTP responses that indicate failure under a success claim.
+We surface those mismatches via structured evidence comparison and emit a
+content-addressed HMAC-attested receipt that can be referenced later.</p>
 <p>This is a small reference implementation, not a canonical standard. The receipt
 format is forkable; vendors and verifiers may diverge.</p>
 
@@ -260,7 +263,7 @@ TOS_PAGE = """<!DOCTYPE html>
 <p><strong>Last updated</strong>: 2026-05-07</p>
 
 <h2>1. Service / 本サービス</h2>
-<p>verify_action ("Service") is a free, no-warranty, third-party verification API
+<p>verify_action ("Service") is a free, no-warranty, post-action verification API
 operated by an individual JP-based developer ("Operator"). The Service is in
 probe / experimental phase. No SLA, no uptime guarantee, no support.</p>
 <p><strong>Intended audience.</strong> The Service is intended for use by software developers,

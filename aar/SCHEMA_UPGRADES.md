@@ -42,34 +42,62 @@ inter-vendor standard.
 
 ---
 
-## v1 (planned) — ed25519 + multi-issuer + reason-code registry
+## Ed25519 migration (calendar-based tactical fix, within 30 days)
 
-**When**: triggered by **any** of the following — not by calendar time:
+**When**: within 30 days of launch, regardless of adoption signal.
 
-1. A second issuer wants to sign receipts under the same schema (e.g. a
-   partner running their own AAR reference instance).
-2. A consumer asks to verify a receipt without holding the symmetric
-   secret (asymmetric verification).
-3. `kill_criteria.S1` (3+ frameworks integrated) is met — at that point
-   the schema becomes load-bearing for downstream and breaking changes
-   become expensive.
+**Why now (not gated on adoption)**: HMAC v0 is single-issuer / symmetric
+and cannot be verified by a third party without involving this service.
+Document-only mitigation has a ceiling. Implementing the asymmetric
+signing path is a small, well-scoped change and removes the single
+biggest framing concession in the README.
 
-**Planned changes**:
+**Scope (does not bump `schema` string)**:
 
-- **Signing**: ed25519 alongside HMAC-SHA256. `signature` field
-  prefix becomes `ed25519:<base64>`. `verify_receipt_signature` already
-  accepts both prefixes for forward compatibility; v1 will document the
-  resolver.
+- ed25519 alongside HMAC-SHA256. `signature` field prefix becomes
+  `ed25519:<base64>`. `verify_receipt_signature` already accepts both
+  prefixes for forward compatibility; the resolver is documented here
+  once shipped.
+- A new `kid` is issued for the ed25519 key (e.g. `v0-ed25519-2026-06`).
+  HMAC `kid` remains resolvable so older receipts continue to validate.
+- Public key publication at `/.well-known/aar-issuer.json` follows
+  within 90 days (separate operational step).
+- `schema` string stays `verify_action_receipt.v0` — only the signing
+  algorithm changes, not the field set.
+
+## v1 (planned) — multi-issuer + reason-code registry + evidence provenance
+
+**When**: triggered by the 90-day main metric (a third-party OSS agent
+harness / repo / pipeline calling `verify_action` from its own decision
+path, e.g. `if receipt.verdict != "verified": stop`). Not by S1-S5
+individually, not by calendar.
+
+**Why this gate**: full v1 introduces multi-issuer trust, a reason-code
+registry, and an evidence-provenance field — all become load-bearing
+for any downstream that consumes receipts cross-issuer. If no downstream
+exists, the work is premature and the schema is best left frozen at v0.
+
+**Planned changes (deferred until main metric is met)**:
+
 - **Multi-issuer**: `issued_by` becomes a verifiable identifier (did:web,
   did:key, or a stable URL of a JWKS-equivalent). `kid` resolves against
   the issuer's published key set.
-- **Verdict semantics**: unchanged (4-value). Reviewers explicitly asked us
-  not to add a fifth verdict; ambiguity should be expressed via
-  `confidence` and `reason_codes`, not new verdicts.
-- **Reason-code catalogue**: v0 leaves `reason_codes` free-form. v1 will
-  publish a registry under `aar/reason_codes/` with stable strings per
-  verifier kind. Free-form codes remain valid; registered codes get a
-  `aar:` prefix for unambiguous lookup.
+- **Evidence provenance**: new required field `evidence_source` ∈
+  `{agent_self_reported, external_api_observation, local_artifact}`.
+  v0 leaves provenance unspecified, which makes self-reported evidence
+  indistinguishable from observed evidence at the receipt level — a
+  trust-boundary gap flagged by reviewers.
+- **5-value verdict** (extension, not replacement): adds
+  `consistent_self_report` for the case where evidence is internally
+  consistent but provenance is `agent_self_reported`. Previous v0
+  guidance was "do not add a fifth verdict; use `confidence` for
+  ambiguity"; that guidance addressed *decision ambiguity*, not
+  *trust-boundary classification*, which is a different axis. Splitting
+  preserves the boundary signal that today is buried in `confidence`
+  + free-form `reason_codes`.
+- **Reason-code catalogue**: registered codes get a stable `aar:` prefix
+  and live under `aar/reason_codes/<kind>.md`. Free-form codes remain
+  valid for transition.
 - **Receipt schema string**: `verify_action_receipt.v1`. Consumers MUST
   reject unknown schema strings, so v0 receipts continue to validate
   against the v0 schema and v1 receipts validate against v1.
