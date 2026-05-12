@@ -111,7 +111,7 @@ A dispatcher routes by `kind` (or auto-infers from evidence shape):
 | `code_diff` | **primary** | `{diff: "<unified diff>"}` | All claimed paths absent from diff |
 | `db_op` | experimental | `{before_count, after_count, operation, affected_rows}` | Claim ID not in SQL ID |
 | `file_op` | experimental | `{path, exists_before, exists_after, line_count?, size_bytes?}` | Numeric divergence > 50% or > 50 absolute |
-| `api_call` | experimental | `{request, response_status, response_body}` | HTTP failure status / error-body under success claim, or URL / non-PII target mismatch |
+| `api_call` | experimental | `{request, response_status, response_body}` | HTTP failure status / error-body under success claim |
 | `generic` | experimental | any object | (conservative; usually returns `insufficient_evidence`) |
 
 `code_diff` is the v0 primary integration target — the agent itself produces the diff that *is* the evidence, so the trust boundary is clean. The other kinds are useful but rely on the caller to construct a faithful evidence object describing external state this service does not independently observe.
@@ -192,7 +192,7 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
     "diff": "--- a/src/user.py\n+++ b/src/user.py\n@@ -10,3 +10,5 @@\n def get_email(user):\n+    if user.email is None:\n+        return None\n     return user.email"
   }
 }'
-# → aar_verdict: verified (legacy: ok), confidence ~0.9
+# → aar_verdict: verified (legacy: ok), confidence ~0.8
 ```
 
 #### `file_op` — line count mismatch
@@ -227,7 +227,7 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 - Submitted claims and evidence are written to private trace logs marked `untrusted_payload`. **Aggregate findings may be published; individual traces stay private.**
 - 30-day log retention is enforced by the included `purge_old_logs.sh` script (operator installs as a daily cron — see `monitor/CRON.md` for the entry).
 - A PII guard rejects payloads containing email addresses, JP phone numbers, JP postal codes / address patterns, 11-13-digit national-ID-shape sequences, JP passport-shape strings, or any 13-19-digit credit-card-shape run (Luhn validity is NOT required — the guard rejects all shape matches). Detection is structural — the guard does NOT confirm any number is a real personal identifier — but the categories cover the regulatory PII surface. Substitute placeholders like `<user_id>` / `<email>` before calling.
-- `traces/` is `chmod 600`.
+- Trace files in `traces/` are `chmod 600` (directory itself is `chmod 700`).
 
 See `/privacy` and `/tos` for the user-facing notice.
 
@@ -400,7 +400,7 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 - claim / evidence は private trace ログに `untrusted_payload` として記録、**集計指標のみ公表します**
 - 30 日でログ自動削除（`purge_old_logs.sh` を operator が daily cron として運用）
 - 以下を含む payload は受領証発行を停止: email アドレス、JP 電話番号、JP 郵便番号 / 住所パターン、11-13 桁の国民 ID 形数列、JP passport 形 (2 大文字 + 7 桁)、13-19 桁の credit-card 形数列（**Luhn check は不要、形マッチは全部 reject**）。検出は形式のみで、番号自体が個人特定情報かは確定しません。`<user_id>` / `<email>` 等の placeholder に置き換えてから呼び出してください。
-- `traces/` は `chmod 600`
+- `traces/` 内のファイルは `chmod 600`（ディレクトリ自体は `chmod 700`）
 
 詳細は `/privacy` `/tos` 参照。
 

@@ -55,9 +55,11 @@ biggest framing concession in the README.
 **Scope (does not bump `schema` string)**:
 
 - ed25519 alongside HMAC-SHA256. `signature` field prefix becomes
-  `ed25519:<base64>`. `verify_receipt_signature` already accepts both
-  prefixes for forward compatibility; the resolver is documented here
-  once shipped.
+  `ed25519:<base64>`. Structural receipt validation (`validate_receipt`)
+  already accepts both `hmac-sha256:` and `ed25519:` prefixes for
+  forward compatibility; signature verification (`verify_receipt_signature`)
+  ships the ed25519 branch alongside the key migration — until then it
+  accepts `hmac-sha256:` only.
 - A new `kid` is issued for the ed25519 key (e.g. `v0-ed25519-2026-06`).
   HMAC `kid` remains resolvable so older receipts continue to validate.
 - Public key publication at `/.well-known/aar-issuer.json` follows
