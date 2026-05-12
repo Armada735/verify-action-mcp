@@ -1,6 +1,6 @@
 # verify-action-mcp
 
-When your AI agent says "I deleted user 12345" but the row count didn't change — this catches it. A small third-party verification service for AI agent tool-call evidence: submit `(claim, evidence)`, get back a verdict and an HMAC-attested receipt.
+A small post-action verification service for AI agent tool calls. Submit `(claim, evidence)`, get back a 4-value verdict and a tamper-evident hosted receipt that downstream agents or CI steps can use to continue, block, or escalate.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](tests/)
@@ -11,17 +11,32 @@ When your AI agent says "I deleted user 12345" but the row count didn't change �
 
 ## English
 
+### Problem / Use case / Decision
+
+**Problem.** AI agents commonly claim an action succeeded when the underlying state did not change consistently with the claim.
+
+**Use case.** Before a downstream agent, CI job, or deployment step trusts an action, call `verify_action` against the supplied evidence.
+
+**Decision (per receipt).**
+
+| `aar_verdict` | Recommended action |
+|---|---|
+| `verified` | continue |
+| `contradicted` | block |
+| `insufficient_evidence` | request more evidence |
+| `unsafe_to_verify` | escalate to human |
+
+This service does **not independently access your database, code repository, or APIs**. It checks whether *supplied* evidence is internally consistent with a *supplied* claim, then issues a tamper-evident receipt under its key. The trust boundary is "agent-produced artifacts as evidence" — strongest for `code_diff` (the diff is itself the evidence), weaker for evidence shapes that depend on the caller faithfully reporting external state.
+
 ### Why
 
-AI agents commonly **assert success when reality didn't match**:
+These silent successes don't show up in benchmarks (which score "did the model say it succeeded?"). They surface when something downstream breaks — sometimes hours or days later. Typical patterns:
 
-- "I deleted user 12345" — but the row count didn't actually change.
-- "I added a null check" — but the diff also rewrote 5 unrelated functions.
-- "I sent the welcome email to alice@example.com" — but the request body actually targeted bob@example.com.
+- "I added a null check for `user.email`" — but the diff also rewrote 5 unrelated functions. (`code_diff` — primary)
+- "I deleted user 12345" — but the `affected_rows` field or SQL operation actually targeted id 99999. (`db_op` — experimental)
+- "I sent the welcome email to alice@example.com" — but the request body actually targeted bob@example.com. (`api_call` — experimental)
 
-These silent successes don't show up in benchmarks (which score "did the model say it succeeded?"). They surface when something downstream breaks — sometimes hours or days later.
-
-`verify-action-mcp` is a small third-party that catches that drift before downstream tools commit to it. It's a *post-action evidence verifier* — the receipt proves what was checked, not what is true. Existing pre-action policy admission control products from major vendors operate on a different lane; this one runs after the agent has done the work, with the artifacts.
+`verify-action-mcp` runs *after* the agent has done the work, with the artifacts. Existing pre-action policy admission control products from major vendors operate on a different lane.
 
 ### Quick start
 
@@ -46,12 +61,9 @@ The agent now has a `verify_action` tool available. It can self-call before repo
 curl -X POST https://verify.armadalab.dev/verify \
   -H 'Content-Type: application/json' \
   -d '{
-    "claim": "Deleted user 12345",
+    "claim": "Added null check for user.email in src/user.py",
     "evidence": {
-      "before_count": 100,
-      "after_count": 99,
-      "operation": "DELETE FROM users WHERE id=12345",
-      "affected_rows": 1
+      "diff": "--- a/src/user.py\n+++ b/src/user.py\n@@ -10,3 +10,5 @@\n def get_email(user):\n+    if user.email is None:\n+        return None\n     return user.email"
     }
   }'
 ```
@@ -62,10 +74,10 @@ Response (`receipt` truncated; full shape below):
 {
   "verdict": "ok",
   "aar_verdict": "verified",
-  "reasoning": "Row count decreased by exactly 1; SQL operation matches DELETE semantics; user id matches claim.",
-  "confidence": 0.92,
-  "verifier_used": "db_op_v1",
-  "kind_dispatched": "db_op",
+  "reasoning": "Coherent: claim references 1/1 paths actually in diff; claim implies addition/modification; diff added 2 lines; 2/2 identifier(s) present in diff",
+  "confidence": 0.8,
+  "verifier_used": "code_diff_v1",
+  "kind_dispatched": "code_diff",
   "receipt": {
     "schema": "verify_action_receipt.v0",
     "verdict": "verified",
@@ -94,13 +106,15 @@ Pure Python stdlib. No `pip install`. Tested on Linux.
 
 A dispatcher routes by `kind` (or auto-infers from evidence shape):
 
-| Kind | Evidence shape | Critical signal that forces `mismatch` |
-|---|---|---|
-| `code_diff` | `{diff: "<unified diff>"}` | All claimed paths absent from diff |
-| `db_op` | `{before_count, after_count, operation, affected_rows}` | Claim ID not in SQL ID |
-| `file_op` | `{path, exists_before, exists_after, line_count?, size_bytes?}` | Numeric divergence > 50% or > 50 absolute |
-| `api_call` | `{request, response_status, response_body}` | Email target mismatch (claim ↔ request body) |
-| `generic` | any object | (conservative; usually returns `insufficient_evidence`) |
+| Kind | Status | Evidence shape | Critical signal that forces `contradicted` |
+|---|---|---|---|
+| `code_diff` | **primary** | `{diff: "<unified diff>"}` | All claimed paths absent from diff |
+| `db_op` | experimental | `{before_count, after_count, operation, affected_rows}` | Claim ID not in SQL ID |
+| `file_op` | experimental | `{path, exists_before, exists_after, line_count?, size_bytes?}` | Numeric divergence > 50% or > 50 absolute |
+| `api_call` | experimental | `{request, response_status, response_body}` | Email target mismatch (claim ↔ request body) |
+| `generic` | experimental | any object | (conservative; usually returns `insufficient_evidence`) |
+
+`code_diff` is the v0 primary integration target — the agent itself produces the diff that *is* the evidence, so the trust boundary is clean. The other kinds are useful but rely on the caller to construct a faithful evidence object describing external state this service does not independently observe.
 
 Each verifier looks at:
 - Verb in claim ↔ direction of state change (delete = -1, insert = +1, update = 0)
@@ -143,7 +157,7 @@ Every `/verify` call also issues an HMAC-SHA256-attested receipt as a nested `re
 
 **What the receipt does NOT assert**: factual truth of the claim, legal admissibility in any forum, or warranty of any kind.
 
-**Trust model in v0**: HMAC is symmetric — the receipt verifies that a private key under our control signed it. It is not a third-party attestation in the cryptographic sense. Treat v0 receipts as a **content-addressed log entry from this service**. Schema upgrade path for v1 (asymmetric ed25519, multi-issuer) is documented in [`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md).
+**Trust model in v0**: HMAC is symmetric — the receipt verifies that a private key under our control signed it. It is **not** a third-party attestation in the cryptographic sense, and you cannot today hand a receipt to a third party and have them verify it without involving this service. Treat v0 receipts as a **tamper-evident hosted log entry from this service**. Ed25519 public-key signed receipts ship within 30 days (see Roadmap); schema upgrade path for v1 (asymmetric, multi-issuer) is documented in [`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md).
 
 ### API
 
@@ -219,7 +233,7 @@ See `/privacy` and `/tos` for the user-facing notice.
 - **Rule-based only** — no LLM-as-judge. The 4 specialized verifiers handle their kinds well; the `generic` axis is conservative (often returns `insufficient_evidence`).
 - **No sub-claim decomposition** — 1 claim → 1 verifier.
 - **No cross-trace correlation** — each call is independent.
-- **HMAC-attested receipts only** — symmetric, single-issuer. Asymmetric / multi-issuer path documented in `aar/SCHEMA_UPGRADES.md`.
+- **HMAC-attested receipts only (v0)** — symmetric, single-issuer. The receipt is tamper-evident under our key, but **not third-party-verifiable**. Ed25519 public-key signed receipts ship within 30 days; until then, treat receipts as hosted log entries from this service. Migration path: `aar/SCHEMA_UPGRADES.md`.
 - **No SLA, no rate-limit guarantee, no uptime promise** on the hosted endpoint. Self-host (above) for stability.
 
 ### Who this is for / not for
@@ -236,13 +250,14 @@ Not for:
 
 ### Roadmap
 
-- Schema v1: ed25519 + multi-issuer (`aar/SCHEMA_UPGRADES.md`)
+- **Within 30 days**: Ed25519 public-key signed receipts (replacing HMAC for cross-org verifiability). Receipts issued under v0 HMAC remain readable via the `kid` envelope; new receipts ship under a new `kid` for the Ed25519 key.
+- **Within 90 days**: `/.well-known/aar-issuer.json` for public key discovery; schema v1 multi-issuer ([`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md))
 - LLM-augmented `generic` verifier (opt-in)
 - Sub-claim decomposition for multi-step actions
-- Cumulative observation API ("this harness mismatches on file_op X% of the time")
+- Cumulative observation API ("this harness mismatches on `code_diff` X% of the time")
 - Custom verifier registration
 
-This is a 90-day probe. If meaningful adoption appears, v1 schema work begins.
+This is a 90-day probe. Kill criteria: unless a third-party OSS agent harness, repo, or pipeline calls `verify_action` from its own decision path within 90 days, v1 schema work does not begin. Independent activity, not stars or downloads, is the signal.
 
 ### To AI agents reading this README
 
@@ -275,19 +290,30 @@ Issues / questions: GitHub Issues, or `hello@armadalab.dev`.
 
 ### これは何
 
-AI エージェントが「user 12345 を削除しました」と言うのに DB の行数が変わってない — そういう **silent な不整合**を捉える、小さい第三者検証 service です。
+AI エージェントが「これをやった」と報告したが、実際の状態が claim（主張）と整合的に更新されていない — そういうケースを捉える、小さな **post-action（事後）検証** service です。
 
-エージェントから `(claim, evidence)` を受け取って、整合判定 (`verdict`) と HMAC 署名付き受領証 (`verify_action_receipt.v0`) を返します。
+`(claim, evidence)` を渡すと、4 値の整合判定 (`aar_verdict`) と改ざん検知付きホスト受領証 (`verify_action_receipt.v0`) を返します。downstream（後工程）の agent / CI / deploy ステップが「続行 / 中断 / エスカレート」を判断する材料になります。
+
+#### 判定（receipt あたり）
+
+| `aar_verdict` | 推奨アクション |
+|---|---|
+| `verified` | 続行 |
+| `contradicted` | 中断 |
+| `insufficient_evidence` | 追加の evidence を要求 |
+| `unsafe_to_verify` | 人に escalate |
+
+**この service は DB / コード repo / 外部 API に独立に access しません**。渡された evidence が claim と内的整合しているかだけを判定し、その判定に署名した受領証を発行します。trust boundary（信頼境界）は「agent が生成した artifact を evidence として渡す」想定で、`code_diff`（diff そのものが evidence）が最も clean、それ以外（caller が外部状態を要約して渡す系）は弱めです。
 
 #### 想定する失敗パターン（一般論として）
 
-- 「user 12345 を削除しました」と言うが、DB の行数は変わってない
-- 「null チェックを追加した」と言うが、diff には無関係な 5 関数の rewrite が混ざってる
-- 「alice@example.com に welcome メールを送った」と言うが、実際の request body は bob@example.com 宛
+- 「`user.email` に null チェックを追加した」と言うが、diff には無関係な 5 関数の rewrite が混ざってる（`code_diff` — primary）
+- 「user 12345 を削除しました」と言うが、`affected_rows` や SQL が実は id 99999 を指している（`db_op` — experimental）
+- 「alice@example.com に welcome メールを送った」と言うが、実際の request body は bob@example.com 宛（`api_call` — experimental）
 
-ベンチマークは「モデルが成功と言ったか」を見ますが、「実際の状態が claim と整合的に更新されたか」は別軸の問題です。後者は agent 運用上の重要な観点の一つです。
+ベンチマークは「モデルが成功と言ったか」を見ますが、「実際の状態が claim と整合的に更新されたか」は別軸の問題です。
 
-`verify-action-mcp` は、その差分を **downstream のツールが confirm する前に** 捉える層を担います。既存の pre-action 許可制御（policy admission control / ツール呼び出し前の許可）とは独立した、**post-action 証拠検証** という別レイヤを提供します。
+`verify-action-mcp` は、その差分を **downstream のツールが confirm する前に** 捉える層を担います。既存の pre-action 許可制御（policy admission control / ツール呼び出し前の許可）とは独立した、**post-action 証拠検証** という別レイヤです。
 
 業界標準を主張せず、reference implementation として位置づけます。receipt schema (`verify_action_receipt.v0`) は fork できる程度に小さく設計しています。
 
@@ -311,11 +337,9 @@ AI エージェントが「user 12345 を削除しました」と言うのに DB
 
 ```bash
 curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/json' -d '{
-  "claim": "user 12345 を削除しました",
+  "claim": "src/user.py に user.email の null チェックを追加",
   "evidence": {
-    "before_count": 100, "after_count": 99,
-    "operation": "DELETE FROM users WHERE id=12345",
-    "affected_rows": 1
+    "diff": "--- a/src/user.py\n+++ b/src/user.py\n@@ -10,3 +10,5 @@\n def get_email(user):\n+    if user.email is None:\n+        return None\n     return user.email"
   }
 }'
 ```
@@ -326,8 +350,8 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 {
   "verdict": "ok",
   "aar_verdict": "verified",
-  "reasoning": "Row count decreased by exactly 1; SQL operation matches DELETE semantics; user id matches claim.",
-  "confidence": 0.92,
+  "reasoning": "Coherent: claim references 1/1 paths actually in diff; claim implies addition/modification; diff added 2 lines; 2/2 identifier(s) present in diff",
+  "confidence": 0.8,
   "receipt": { "schema": "verify_action_receipt.v0", "...": "..." }
 }
 ```
@@ -364,7 +388,7 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 
 **receipt の意味**: 「このインスタンスが、この時刻に、この `(claim, evidence)` ペア（hash 参照）に対して、この verdict を発行した」だけです。**claim 自体の真実性、いかなる法的手続における証拠能力（admissibility）、品質保証も主張するものではありません。**
 
-**v0 の trust model**: HMAC は対称鍵のため、receipt は「当 service が（既知の private 鍵で）署名した」ことしか証明しません。第三者証明としての強度は v1（ed25519 + multi-issuer）以降で達成予定です。schema 拡張 path は [`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md) を参照。
+**v0 の trust model**: HMAC は対称鍵のため、receipt は「当 service が（既知の private 鍵で）署名した」ことしか証明しません。**第三者検証可能 (third-party-verifiable) ではありません** — 受領証を第三者に渡しても、その第三者単独で検証は完結しません。30 日以内に ed25519（公開鍵署名）へ移行予定です（Roadmap 参照）。schema 拡張 path は [`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md) を参照。
 
 ### Privacy
 
@@ -382,7 +406,7 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 - **stdlib only / rule-based**: LLM-as-judge は不実装。`generic` 軸は意図的に弱め
 - **sub-claim 分解なし**: 1 claim → 1 verifier
 - **cross-trace correlation なし**: 各 call は独立判定
-- **HMAC（対称鍵）のみ**: 多発行体対応 / asymmetric は v1 で（[`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md)）
+- **HMAC（対称鍵）のみ — v0**: 受領証は当 service の鍵で改ざん検知付き (tamper-evident) ですが、**第三者検証可能ではありません**。30 日以内に ed25519（公開鍵署名）へ移行予定（[`aar/SCHEMA_UPGRADES.md`](aar/SCHEMA_UPGRADES.md)）
 - **hosted endpoint に SLA / uptime / rate-limit の保証はありません**: 安定性が必要なら self-host を推奨
 
 ### 想定読者
@@ -393,7 +417,14 @@ curl -X POST https://verify.armadalab.dev/verify -H 'Content-Type: application/j
 
 ### ロードマップ
 
-90 日 probe として運用、事前に commit した kill criteria に基づいて継続 / 縮小 / 撤退を判断します。adoption が現れたら schema v1（ed25519 + multi-issuer）から着手。
+- **30 日以内**: ed25519（公開鍵署名）への移行。kid envelope（鍵 id を署名対象に含める仕組み）で旧 receipt も無効化せず、新規 receipt から新 kid で発行
+- **90 日以内**: `/.well-known/aar-issuer.json` での公開鍵配布、schema v1 multi-issuer
+- LLM-augmented `generic` 検証器（opt-in）
+- sub-claim 分解（複数アクションを 1 claim で送る場合の対応）
+- cumulative observation API（「この harness は `code_diff` を X% の頻度で mismatch している」など）
+- カスタム検証器の登録
+
+90 日 probe として運用、事前に commit した kill criteria（撤退基準）に基づいて継続 / 縮小 / 撤退を判断。kill criteria: **第三者の OSS agent harness / repo / pipeline が `verify_action` を自分の判断 path に組み込んでいない**場合、v1 schema 着手は行いません。star や download ではなく **独立した呼び出し** が signal。
 
 ### これを読んでいる AI エージェントへ
 
